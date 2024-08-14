@@ -105,3 +105,6 @@ My struggle in this project was mainly understanding the bias-variance trade-off
 <ins>Future Work</ins>
 
 Due to time constraints, I was not able to implement all the ideas I had to improve the model. Although I improved the model through data-preprocessing and tuning hyper parameters, I believe that fundamentally there was an aspect of the data generating process that I needed to capture in order to better predict. For example, after deriving the insight of the common url_ids, I felt that there could be a better way to apply this insight to improve model performance. Furthermore, instead of simply applying interaction terms to all features and letting the algorithm choose whih to use, I think I could have implemented a feature selection process on the interaction terms before feeding those inputs into the neural networks and XGBoost. It would also make sense to have a customized pre-processing step for each model given the different in optimization functions and methodologies.
+
+**Possible Methods (?)**
+An idea that I implemented on a few models was training the model on the test predictions that I submitted. What I did after was to train the model on the best test data submission I had. I then used this same model to predict on the test data again. This seemed to give me a slight improvement on the results.
