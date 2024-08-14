@@ -5,22 +5,6 @@
 
 This repo contains the different optimized models that were trialled for the final project. It contains a QMD file outlining the tuning steps, EDA and data-processing steps as well as visualizations to better understand the underlying distribution of the data. 
 
-Also included are the various optimized models with the hyperparameters tuned based on cross-validation. In particular, I attempted to tune the Neural Network and Boosted Trees model.
-
-The models I tried include:
-
-1. KNN
-2. Random Forest
-3. Logistic Regression
-4. SVMs
-5. Boosted Trees
-6. Neural Networks
-
-There are 2 objectives I hoped to achieve by trying out all these models:
-
-1. Identify the best 2 - 3 models to build an ensemble from to classify
-2. Analyze the classification error of each model to identify if certain models work better under certain conditions. (E.g. does a model perform better because it has lower type 1 error - wrongly classifies 1 as 0s? If so this can be bundled with a model that has lower type 2 error - wrongly classifies 0s as 1s to improve predictions)
-
 # Understanding the Data (EDA)
 
 Given that the data comes from search queries and matching url_ids to see if they are relevant, I explored the data to see if there were any common url_ids that appeared. In particular I found that although there were 0 common query ids in the training and testing set, there were 1067 common URL ids that were present in both the training and testing data set. I proceeded then to find out in the training dataset 
@@ -54,12 +38,35 @@ I tried the following data pre-processing steps throughout different models:
 
 **Transformation**
 ---
+I mainly used 3 different transformation methods to create new features
+
+1. Creation of interaction terms
+2. Creation of basis splines
+3. Creation of natural splines
+
+The creation of interaction terms was very important in helping me improve the model especially for the XGBoost algorithm. The basis and natural splines were created in order to model non-linear relationships between the predictor outcome and the numerical features. Viewing the variable importance plot gave me insights to whether these transformations were useful in the classification model.
 
 **Data Mining**
 ---
 
+Included in this repo are the various optimized models with the hyperparameters tuned based on cross-validation. In particular, I spent majority of my time and effort trying to tune the hyperparameters for the Neural Network and Boosted Trees model. In terms of cross-validation, models were evaluated based on ROC AUC, given that i was trying to strike a balance between the True Positive Rate and the False Positive Rate.
+
+The models I tried include:
+
+1. KNN
+2. Random Forest
+3. Logistic Regression
+4. SVMs
+5. Boosted Trees
+6. Neural Networks
+
+There are 2 objectives I hoped to achieve by trying out all these models:
+
+1. Identify the best 2 - 3 models to build an ensemble from to classify
+2. Analyze the classification error of each model to identify if certain models work better under certain conditions. (E.g. does a model perform better because it has lower type 1 error - wrongly classifies 1 as 0s? If so this can be bundled with a model that has lower type 2 error - wrongly classifies 0s as 1s to improve predictions)
 
 <ins>Ensemble Methods</ins>
+
 I devised 3 different ways that the 2 models could be "ensembled" together, drawing on different techniques
 
 1) Majority Voting
@@ -80,6 +87,10 @@ The #3 ensemble technique gave me the best results when I combined XGBoost and N
 **Interpretation/Evaluation**
 ---
 
+I did not use a training/testing split in my model evaluations. I initially tried boostraping but due to computational limitations I opted for 5-fold cross validation instead for model tuning. Also because for bootstrapping I would only be training the model on ~66% of the data. The reason why I didn't do a training testing split was because there was the Kaggle Submissiomn platform which I used as my "test" set. I would often tune hyperparameters based on that. 
+
+As mentioned above,hyperparameters were optimzied via cross-validation using ROC-AUC.
+
 **Future Work/Reflection**
 ---
 
@@ -93,4 +104,4 @@ My struggle in this project was mainly understanding the bias-variance trade-off
 
 <ins>Future Work</ins>
 
-Due to time constraints, I was not able to implement all the ideas I had to improve the model. Although I improved the model through data-preprocessing and tuning hyper parameters, I believe that fundamentally there was an aspect of the data generating process that I needed to capture in order to better predict.
+Due to time constraints, I was not able to implement all the ideas I had to improve the model. Although I improved the model through data-preprocessing and tuning hyper parameters, I believe that fundamentally there was an aspect of the data generating process that I needed to capture in order to better predict. For example, after deriving the insight of the common url_ids, I felt that there could be a better way to apply this insight to improve model performance. Furthermore, instead of simply applying interaction terms to all features and letting the algorithm choose whih to use, I think I could have implemented a feature selection process on the interaction terms before feeding those inputs into the neural networks and XGBoost. It would also make sense to have a customized pre-processing step for each model given the different in optimization functions and methodologies.
