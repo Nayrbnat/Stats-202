@@ -3,7 +3,7 @@
 
 **Kaggle Leaderboard name: Nayrbnat**
 
-This repo contains the different optimized models that were trialled for the final project. It contains a QMD file outlining the tuning steps, EDA and data-processing steps as well as visualizations to better understand the underlying distribution of the data. 
+This repo contains the different optimized models that were trialled for the final project. It contains a QMD file outlining the optimized models, EDA and data-processing steps as well as visualizations to better understand the underlying distribution of the data. The R scripts with the model names indicates the code for the tuning process.
 
 # Understanding the Data (EDA)
 
