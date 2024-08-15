@@ -1,0 +1,848 @@
+---
+title: "Kaggle Submission STATS 202"
+author: <nayrbnat@stanford.edu>
+output: html
+self-contained: true
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+GitHub Repo: https://github.com/Nayrbnat/Stats-202-Stanford-ID---Nayrbnat-
+
+```{r,message=FALSE, warning=FALSE}
+# Tidyverse packages
+library(readr)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+# Tidymodels packages, spelled out individually for clarity
+library(parsnip)
+library(yardstick)
+library(recipes)
+library(rsample)
+library(tune)
+library(workflows)
+library(rpart)
+library(tune)
+library(broom)
+library(caret)
+library(tibble)
+
+
+#Additional libaries
+library(tune)
+library(vip)
+library(corrplot)
+library(themis)
+library(progress)
+library(xgboost)
+library(baguette)
+library(kknn)
+library(car)
+library(brulee)
+```
+
+# Part 1 - Exploratory Data Analysis
+
+```{r,message=FALSE, warning=FALSE}
+# Load the dataset
+test_data <- read_csv("data/test.csv",show_col_types = FALSE)
+train_data <- read_csv("data/training.csv",show_col_types = FALSE)
+
+```
+
+## Identifying any repeated query or URL IDs in the test and training set
+
+```{r,message=FALSE, warning=FALSE}
+# Common query IDs
+common_query_ids <- intersect(train_data$query_id, test_data$query_id)
+length(common_query_ids)
+# Common URL IDs
+common_url_ids <- intersect(train_data$url_id, test_data$url_id)
+length(common_url_ids)
+```
+
+There are 1067 common url IDs between the training and testing dataset.
+Let us see if URL IDs are a good metric to predict the relevance.
+
+I want to understand the data better to know if given a certain URL,
+will the website be relevant 100% of the time? If not, can I extract the
+URLs which all give the same relevance value and then use those to
+predict the test data. The intuition behind this is that there are some
+common URL IDs that are likely to be searched on the internet. This
+could be popular sites such as YouTube, Twitter, etc. Hence, for these
+URL_ids, the likelihood that they are relevant is a lot higher compared
+to the average URL_id. It can be seen that
+
+```{r,message=FALSE, warning=FALSE}
+train_data %>%
+  filter(url_id %in% common_url_ids) %>% count(relevance) 
+```
+
+Number of "relevant" queries made for the "common urls" is 57.9%. Hence
+it can be seen that simply changing the values to 1 for these url_ids
+doesn't make much sense.
+
+```{r,message=FALSE, warning=FALSE}
+common_url_df <- train_data %>%
+  filter(url_id %in% common_url_ids) %>%
+  group_by(url_id) %>%
+  summarise(
+    all_same_relevance = n_distinct(relevance) == 1,
+    .groups = 'drop'
+  )
+#Obtaining the urls which give the same correct relevance value
+true_url_ids <- common_url_df %>%
+  filter(all_same_relevance == TRUE) %>%
+  pull(url_id)
+
+common_url_df %>% count(all_same_relevance)
+
+```
+
+I observed that for the training data, simply assigning rows which have
+the same URL with the same relevance would give an accuracy of 83%. This
+is much higher accuracy rate compared to what we did earlier. I define
+"true url ids" as URL IDs which had the same kind of relevance across
+all the different queries made to it. These URLs can be broadly
+classified as highly relevant or irrelevant
+
+```{r,message=FALSE, warning=FALSE}
+print(paste("Number of rows of predictable urls in test data:", test_data %>%
+  filter(url_id %in% true_url_ids) %>% nrow))
+```
+
+## Assigning relevance just based on common urls
+
+```{r}
+#Filtering true_url_relevance
+true_url_relevance <- train_data %>%
+  filter(url_id %in% true_url_ids) %>% select(url_id,relevance) 
+
+# Appending the test data with the assigned relevance value 
+test_data_with_relevance <- test_data %>%
+  left_join(true_url_relevance %>% select(url_id, relevance), by = "url_id",relationship = "many-to-many")
+test_data_with_relevance <- test_data_with_relevance %>%
+  distinct(id, .keep_all = TRUE)
+test_data_with_relevance
+```
+
+Although I did this step, when I tested the submission with this imputed
+data vs without, it did not show any improvement. Hence I did not
+include it in the final submission.
+
+## Checking for missingness
+
+Due to the 5-page requirement I did not include the code here but what I
+did prior to this was check for missingness in the data. This is very
+important because key decisions such as whether to drop the rows of
+missing data or to impute them depend on whether the data is MCAR
+(missing completely at random), MAR (missing at random) or NMAR (not
+missing at random). I used the Naniar package to help visualize these
+missigness patterns. Luckily, there was no missing data in the training
+set.
+
+## Checking distribution of data
+
+The next step in my exploratory data analysis is to look at the
+distribution of data across each feature to inspect the distribution of
+the data. For data that is very skewed, I might need to rescale or
+transform the data depending on the model or algorithm that I am using
+to get better predictions.
+
+```{r,message=FALSE, warning=FALSE}
+# Distributions for training data
+for (i in colnames(train_data)) {
+  if (is.numeric(train_data[[i]])) {  # Check if the column is numeric
+    hist(train_data[[i]], 
+         main = paste("Distribution of", i), 
+         xlab = paste("train", i), 
+         col = "blue", 
+         border = "black")
+  }
+}
+```
+
+From these simple histograms, it can be seen that the
+
+```{r,message=FALSE, warning=FALSE}
+# Distributions for testing data
+for (i in colnames(test_data)) {
+  if (is.numeric(test_data[[i]])) {  # Check if the column is numeric
+    hist(test_data[[i]], 
+         main = paste("Distribution of", i), 
+         xlab = paste("train", i), 
+         col = "blue", 
+         border = "black")
+  }
+}
+```
+
+In observing the distribution of the different features and the target
+variable, I can conclude that the distribution for the training and
+testing data are quite similar. Furthermore, there are certain features
+which show a distribution similar to a normal distribution, whereas for
+some features it is skewed to the right.
+
+-   **Features which appear to follow a normal distribution:** sig2,
+    sig7, sig8
+
+-   **Features with right-skew:** query_length, sig3, sig5, sig6
+
+In terms of the url_id and query_id there is a lack of data in the last
+bin towards the end of the distribution. This could be due to the cut
+off of the data at 30,001 for test and 80,046 for training data.
+
+**Checking for Multi-collinearity between features**
+
+```{r}
+model <- lm(train_data %>% select(-relevance))
+vif(model)
+```
+
+VIF = 1 suggest no correlation between the predictor and other
+predictors. Arbitrarily, a VIF value higher than 5 suggests potential
+multicollinearity issues. The only predictor where this might be the
+case is sig5. Although that is the case, I believe that sig5 provides
+value in the dataset to make predictions and should not be dropped.
+
+**Checking for balance in target variable**
+
+In ML models, an unbalanced dataset may result in skewed predictions.
+This occurs when the data that is used to train the model has
+predominantly more number of observations belonging to a particular
+
+```{r}
+table(train_data$relevance)
+```
+
+It can be seen that there are more non-relevant queries compared to
+relevant. This dataset, although not perfectly balanced, shows a decent
+distribution of positives and negatives. With that being said, it might
+be worthwhile to try some under/oversampling in the pre-processing steps
+in order to improve prediction results.
+
+# Part 2 - Supervised Learning
+
+Given that this is a classification problem, these models will aim to
+optimize for log-likelihood or cross-entropy depending on the specific
+algorithm. I will compare the effectiveness of these different models by
+cross-validation evaluated on ROC AUC and then pick the top models to
+use for the final prediction. The metric that I will optimize for is the
+ROC AUC as this balances between true and false positive rates. I will
+then ensemble the models together to make a final prediction. For each
+model I will tune the data and find the optimal hyperparameter that
+should be used.
+
+I am going to be using 6 different models together:
+
+1.  Random Forest
+
+2.  Logistic Regression
+
+3.  SVMs
+
+4.  KNN
+
+5.  Boosted Trees (XGBoost)
+
+6.  Neural Networks (Brulee)
+
+## Data-pre processing
+
+I set the is_homepage as a dummy variable because it only contains
+values of 0 and 1 representing whether the query was made at the
+homepage. This should not be treated as a numeric variable. Relevance
+also needs to be treated as a factor for the classification problem.
+
+```{r,message=FALSE, warning=FALSE}
+#Adjusting the training dataset 
+train_data$relevance <- as.factor(train_data$relevance) # Setting the target variable as a factor
+train_data$is_homepage <- as.factor(train_data$is_homepage) # Setting this variable as a factor
+test_data$is_homepage <- as.factor(test_data$is_homepage)
+```
+
+**Creating 5-folds for cross validation**
+
+```{r,message=FALSE, warning=FALSE}
+folds <- vfold_cv(train_data, v=5)
+```
+
+## KNN Model
+
+For data-preprocessing, I normalized all the numeric predictors because
+KNN uses euclidean distances between points. Hence scaling is important
+to not skew the predictions based on a few features. I also remove any
+zero variance nominal predictors.
+
+On the initial run i tested the range of 1 to 30 for K. This gave me an
+optimal k value of 30 so I had to expand my gridsearch. I tuned the
+model across values of k = 1 to k = 30 gave me the best model. Hence I
+proceed to test this again, expanding my grid search to 500. K = 590
+gave the lowest error.
+
+**Optimal KNN Model**
+
+<details>
+
+<summary>KNN Model + Results</summary>
+
+```{r,message=FALSE, warning=FALSE,eval=TRUE}
+# Recipe
+rec_knn <- recipe(relevance ~., data = train_data) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_dummy(is_homepage) %>%
+  step_zv(all_nominal_predictors())
+
+# Model
+model_knn <- nearest_neighbor(neighbors = 590) %>% #Choosing 590 based on grid-search tune above
+  set_engine("kknn") %>% 
+  set_mode("classification")
+
+# Workflow
+wflow_knn <- 
+  workflow() %>% 
+  add_recipe(rec_knn) %>% 
+  add_model(model_knn)
+
+# Cross-validation result on ROC AUC
+
+results_knn <- tune::fit_resamples(object = wflow_knn, folds, 
+                               metrics = metric_set(roc_auc))
+results_knn %>% collect_metrics()
+```
+
+</details>
+
+## Random Forest
+
+I initially wanted to use decision trees but decision trees often
+overfit the training data and give inaccurate predictions on the test
+data-set. Hence I am opting to use random forest. An alternative for
+this could be bagged decision trees but I think it would be important to
+randomly sample subset of predictors to give a final prediction as this
+could reduce overfitting to the training data. For this step, I opt to
+add an additional pre-processing step:
+
+Another reason why I choose random forest is because of its
+interpretability. I am able to identify which features are more
+important in making the decision splits.
+
+Based on ROC AUC, the optimal hyper-parameter for random forest is 3
+predictors, 9 trees and tree depth of 7.
+
+**Optimal Random Forest Model**
+
+<details>
+
+<summary>Random Forest Model</summary>
+
+```{r,message=FALSE, warning=FALSE}
+#Fitting the Workflow with optimized hyperparameter
+set.seed(123)
+
+# Recipe
+rec_rf <- 
+    recipe(relevance ~., data = train_data) %>% 
+    step_normalize(all_numeric_predictors()) %>%
+    step_zv(all_nominal_predictors()) %>%
+    step_nzv(all_nominal_predictors()) %>%
+    step_dummy(is_homepage) 
+
+# Model
+
+forest_model <- 
+  rand_forest(mtry = 3) %>% 
+  set_engine("randomForest", trees = 9 ,tree_depth = 7) %>% 
+  set_mode("classification")
+
+# Creating the workflow
+
+wflow_rf <- 
+  workflow() %>% 
+  add_recipe(rec_rf) %>% 
+  add_model(forest_model)
+
+results_rf <- tune::fit_resamples(object = wflow_rf, folds, 
+                               metrics = metric_set(roc_auc))
+results_rf %>% collect_metrics()
+```
+
+</details>
+
+Random forest model gave me a ROC AUC value of 0.705. This is not very
+high so let us try training other models.
+
+**Most Important Features for Random Forest**
+
+```{r,message=FALSE, warning=FALSE,eval=TRUE}
+#Fit
+fitted_rf <- fit(wflow_rf , data = train_data)
+vip(fitted_rf$fit$fit)
+```
+
+## Logistic Regression
+
+Logistic regression is often used a model for classification. Hence, I
+wanted to try to see if it could give better results.
+
+<details>
+
+<summary>Logistic Regression</summary>
+
+```{r,message=FALSE, warning=FALSE,eval=TRUE}
+
+# Recipe for logistic regression
+rec_log <-
+  recipe(relevance ~., data = train_data) %>% 
+    step_normalize(all_numeric_predictors()) %>%
+    step_dummy(is_homepage) %>%
+    step_zv(all_nominal_predictors()) %>%
+    step_nzv(all_nominal_predictors())
+ 
+
+# Creating the logistic regression model
+log_reg_model <- 
+    logistic_reg() %>% 
+    set_engine("glm") %>% 
+    set_mode("classification")
+
+# Creating the workflow
+log_reg_wf <- 
+    workflow() %>% 
+    add_recipe(rec_log) %>% 
+    add_model(log_reg_model)
+
+# Fitting the logistic model
+results_log <- tune::fit_resamples(object = log_reg_wf , folds, 
+                               metrics = metric_set(roc_auc))
+results_log %>% collect_metrics()
+```
+
+</details>
+
+Logistic Regression Model has a ROC AUC value of 0.700. This is lower
+than that of the random forest model.
+
+## SVMs Tuning (Linear/Radial/Polynomial Kernel)
+
+SVMs are very computationally intensive. I decided to only tune the
+linear models as the radial and polynomial kernels took too much compute
+and were not feasible to tune. The basic SMO is O(n3), so in the case of
+80,000 data points, it has to run operations proportional to 512
+trillion. Futhermore, given that I have an expanded feature space of
+high dimensionality, SVMs seem like a good model to try to improve
+prediction outcomes given that they perform better in high feature
+spaces.
+
+I tried to tune the SVM models using cross-validation, but unfortunately
+it took too long. I hence attempt a 5-fold cross validation only on the
+linear SVM. The following code only shows my attempt for the linear
+kernel SVM. However, given the large number of features, SVM models will
+be unlikely to give a good fit.
+
+**Linear Kernel**
+
+The optimal hyper parameter for a linear kernel SVM is cost of 0.9.
+
+**Optimal SVM Model**
+
+Due to computational reasons, I will not be running the code for the SVM model when exporting the HTML file. This took >3hrs and still did not finish.
+
+<details>
+
+<summary>Optimal Linear SVM Model</summary>
+
+```{r,message=FALSE, warning=FALSE,eval=FALSE}
+# Recipe
+rec_svm <-  recipe(relevance ~., data = train_data) %>% 
+    step_normalize(all_numeric_predictors()) %>%
+    step_zv(all_nominal_predictors()) %>%
+    step_nzv(all_nominal_predictors()) %>%
+    step_dummy(is_homepage)#is_homepage as a categorical variable
+
+svm_model_linear <- 
+    svm_linear(mode = "classification", cost = 0.9) %>% 
+    set_engine("kernlab")
+
+wflow_svm_linear <- 
+  workflow() %>% 
+  add_recipe(rec_svm) %>% 
+  add_model(svm_model_linear)
+
+# Collating resutls for SVM
+results_svm <- tune::fit_resamples(object = wflow_svm_linear, folds, 
+                               metrics = metric_set(roc_auc))
+results_svm
+```
+
+</details>
+
+## Boosted Trees Tuning (XG Boost)
+
+After analysing the models above, I realized that in order to get strong
+predictive models I will need to employ XGBoost and Neural networks with
+multiple hidden layers. This is with reference to the fact that the top
+models in Kaggle competitions often stem from these 2 algorithms. I
+tried using bagged neural networks with 1 layer but that gave me very
+unsatisfactory results.
+
+Most of the data-preprocessing and feature selection was done here. Let
+me go through the rationale and different methods I tried.
+
+### Data-Preprocessing
+
+I will classify the following data-preprocessing steps into 2
+categories:
+
+***Creation of new features*** 🆕
+
+Having 12 features and training on 80,000 rows of data is unlikely to
+give a good model. Hence, at this stage I realized that in order to get
+better predictions I would need to expand the feature space. Here I am
+using step_interact() to generate features that reflect the interaction
+terms between the different features. Due to this pre-preprocessing
+step, I expanded the number of features.
+
+***Scaling/resampling techniques*** ⚖️
+
+1.  [Step down/upsample]{.underline} ⚖️
+
+As mentioned before, I tuned the model with oversampling and
+undersampling as a data-preprocessing step due to the nature of the
+unbalanced dataset. However, given that the degree of unbalanced data is
+pretty low. I tried cross validation tuning as well as tuning based on
+the 20% test set on kaggle. The conclusion from my submissions is that
+adding this pre-processing step would not reliably improve the accuracy
+of predictions.
+
+2.  [Basis splines (and adjusting the degrees of freedom)]{.underline}
+    🆕
+
+I decided to test out adding basis splines to certain features in the
+dataset. I tested out 3 different configurations with respect to basis
+splines:
+
+**Adding/Removing it as a pre-processing step**
+
+The justification of adding a basis spline for this model is to capture
+non-linearity in relationships between the features. The default value
+for step_bs() polynomial of degree 3 with no restrictions on degrees of
+freedom. I initially tried and tested the basis spline on all features
+in order to see if it would improve performance. The result is that
+blindly applying the basis spline transformation
+
+**Applying the basis spline to certain features based on the Variable
+Importance from the XGboost model**
+
+I first visualize the features with respect to relevance to see if there
+are any non-linear relationships that require a basis spline to
+represent. This allows me to target the basis spline transformation to
+certain features.
+
+I also trained and fit a standard XGBoost model without any basis
+splines to see which of the original features had higher importance.
+
+![![](images/clipboard-2409566630.png)](images/clipboard-2409566630.png)
+
+<details>
+<summary>Standard XGBoost</summary> 
+```{r}
+# Standard Model
+
+rec_boost <- recipe(relevance~., data = train_data) %>% 
+  step_naomit(all_predictors()) %>%
+  update_role(id,url_id, new_role = "id") %>%
+  step_dummy(is_homepage) 
+  
+boost_model <- boost_tree(
+  mode = "classification"
+) %>% set_engine("xgboost", verbose = 1,nthread=16, validation = 0.1)
+
+# Workflow
+boost_tree_wf <- 
+    workflow() %>% 
+    add_recipe(rec_boost) %>% 
+    add_model(boost_model)
+
+#Fit
+fitted_boosted <- fit(boost_tree_wf , data = train_data)
+
+#Viewing the important features
+vip(fitted_boosted$fit$fit)
+```
+
+Signal 2 seems to be the most important predictor, followed by signal 6.
+Therefore I decided to apply a basis spline to sig2 to see if it could
+potentially give me better results.
+
+**Tuning the degrees of freedom for each configuration**
+
+3.  [Natural Splines]{.underline} 🆕
+
+Natural splines are a subset of basis splines. I decided that given the
+nature of the data - the right tail end of the distribution has lower
+frequency for query IDs. Hence the XGboost model may make worse
+predictions for tail end values due to the lack of data support.
+
+4.  [Normalizing features]{.underline}⚖️
+
+I tried normalizing numerical features for XGBoost and Neural Networks.
+The result was that XGBoost performed significantly worse when numerical
+values were normalized compared to when they won't. The reason for this
+is that XGboost comes from a tree based model and the actual scaling of
+the features doesn't impact the splitting criteria. Normalization might
+disrupt the natural order of feature importance by making features
+appear more similar in scale, potentially leading to less effective
+splits.
+
+5.  [log() transformation]{.underline} ⚖️
+
+I tried applying the log() transformation to some variables due to the
+fact that these features might have a non-linear relationship with the
+relevance classification and this might help prediction accuracy by
+linearizing that relationship.
+
+6.  [Yeo-Johnson transformations]{.underline} ⚖️
+
+I came across this transformation when reading the documentation for
+recipes. This is an adapted version of the Box-Cox transformation but
+applies to positive and negative data. The Yeo-Johnson transformation
+can normalize distributions for negatively skewed data, and it can also
+create a more uniform dataset by inflating low variance data and
+deflating high variance data, and works by applying a power function to
+each value. The rationale for apply Yeo-Johnson to the data is that
+there are some numerical features that are right skewed and applying
+Yeo-Johnson can help the XGboost model better make predictions. Boosted
+decision trees fits new models onto the residuals, therefore outliers
+can have an outized impact on the model's performance.
+
+### Model Hyper-Parameter Tuning
+
+On top of expanding the feature space and scaling predictors, tuning the
+hyperparameters of the models is also very important. The following
+hyperparameters are available for tuning under parsnip package for
+boosted trees. I used xgboost as the preferred engine due to its extreme
+gradient descent. It would be possible to test out other engines but
+with the limitation of time, only xgboost was use.
+
+**Hyper Parameters**
+
+1.  Mtry
+
+2.  Trees
+
+3.  min_n
+
+4.  tree_depth
+
+5.  learn_rate
+
+6.  loss_reduction
+
+7.  sample_size
+
+8.  stop_iter
+
+I played around with these various hyper-parameters and tuned the model
+using 5-fold cross validation. The model below is the result of that.
+For those hyperparameters that were excluded, that was because I
+recognized the base algorithm worked the best.
+
+**Optimal XGBoost Model**
+
+<details>
+<summary>Optimal XGBoost</summary> 
+
+```{r,message=FALSE, warning=FALSE,eval=TRUE}
+#Boosted Trees
+rec_boost <- recipe(relevance~., data =train_data) %>% 
+  step_naomit(all_predictors()) %>%
+  update_role(id,url_id, new_role = "id") %>%
+  step_dummy(is_homepage) %>%
+  step_bs(sig2) %>%
+  step_interact(terms = ~ all_predictors() ^ 3) 
+  
+# Optimal Model for XG Boost
+boost_model <- boost_tree(
+  mode = "classification",
+  trees = 150,
+  mtry = 30,
+  learn_rate = 0.001,
+  tree_depth = 4,
+  min_n = 40
+) %>% set_engine("xgboost", verbose = 1,nthread=16, validation = 0.1)
+
+# Workflow
+boost_tree_wf <- 
+    workflow() %>% 
+    add_recipe(rec_boost) %>% 
+    add_model(boost_model)
+
+fitted_boosted <- fit(boost_tree_wf , data = train_data)
+
+# Make Predictions
+predictions_boosted <- predict(fitted_boosted, new_data = test_data,type = "prob") %>%
+  as.data.frame() %>%
+  mutate(relevance = if_else(.pred_0 > .pred_1, 0, 1)) %>%
+  mutate(id = test_data$id) %>%
+  rename(boost.pred_0 = .pred_0)%>%
+  rename(boost.pred_1 = .pred_1)
+
+# Cross-validation results
+results_boost <- tune::fit_resamples(object = boost_tree_wf, folds, 
+                               metrics = metric_set(roc_auc))
+results_boost %>% collect_metrics()
+```
+
+</details>
+
+## Neural Networks
+
+For the Neutral Networks, I found that normalizing the features was very
+important in improving the accuracy of my model.
+
+**Optimal Neural Network Model**
+
+<summary>Optimal Neural Network</summary>
+
+```{r,message=FALSE, warning=FALSE}
+rec_dl <- recipe(relevance~., data = train_data) %>% 
+  step_naomit(all_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  update_role(id,url_id, new_role = "id") %>%
+  step_dummy(is_homepage) %>%
+  step_bs(sig2) %>%
+  step_interact(terms = ~ all_predictors() ^ 2) 
+    
+# Model
+model_dl <- mlp(hidden_units = c(20, 10, 5)) %>%
+  set_mode("classification") %>% 
+  set_engine("brulee", rate_schedule = "cyclic", step_size = 5,
+             stop_iter = 10, penalty = 0.005, learn_rate = 0.03)
+
+# Workflow
+wflow_dl <- workflow() %>%
+  add_recipe(rec_dl) %>%
+  add_model(model_dl)
+
+
+# Cross-validation results
+results_dl <- tune::fit_resamples(object = wflow_dl, folds, 
+                               metrics = metric_set(roc_auc))
+results_dl %>% collect_metrics()
+```
+
+```{r,message=FALSE, warning=FALSE}
+# penalty, learn_rate removed from workflow, using base brulee_mlp
+fit_dl <- brulee_mlp(rec_dl, data = train_data, hidden_units=c(20,10,5), rate_schedule = "cyclic", step_size = 5,stop_iter = 10,penalty = 0.005,learn_rate = 0.03)
+# Making Predictions
+predictions_dl <- predict(fit_dl, new_data = test_data,type = "prob") %>%
+  as.data.frame() %>%
+  mutate(relevance = if_else(.pred_0 > .pred_1, 0, 1)) %>%
+  mutate(id = test_data$id) %>%
+  rename(dl.pred_0 = .pred_0)%>%
+  rename(dl.pred_1 = .pred_1)
+
+```
+
+</details>
+
+# Final Results
+
+```{r,message=FALSE, warning=FALSE}
+
+# Define model names and corresponding results
+model_names <- c("Logistic Regression", "Random Forest", "KNN", "XGBoost", "Neural Network")
+result_objects <- list(results_log, results_rf, results_knn, results_boost, results_dl )
+
+# Initialize an empty list to store metrics
+metrics_list <- list()
+
+# Loop over the models to collect metrics
+for (i in seq_along(model_names)) {
+  metrics <- collect_metrics(result_objects[[i]]) %>%
+    mutate(model = model_names[i])
+  metrics_list[[i]] <- metrics
+}
+
+# Combine all the metrics into a single data frame
+metrics_combined <- bind_rows(metrics_list)
+
+# View the combined metrics
+print(metrics_combined)
+
+```
+Although these are the results, the KNN and XGBoost model performed the best on the test kaggle set.
+
+# Part 4 - Ensemble Techniques
+
+The neural network and boosted trees model appear to be performing the
+best based on accuracy results submitted on Kaggle. In order to bag the
+predictions together, I test 2 separate bagging techniques
+
+## Ensemble Method #1
+
+In this case if both models classify a relevance of 1, the overall model will predict 1. If either model predicts 0, the model will predict 0. If the models both predict 0, it will be classified as 0. This is not a very good method but something that I tried.
+
+1.  Neural Network
+
+2.  Boosted Decision Tree
+
+```{r,message=FALSE, warning=FALSE}
+# Dataframe combining the predictions made by each predictor
+merged_df1 <- merge(x= predictions_dl%>% select(-relevance), y= predictions_boosted%>% select(-relevance), by = "id", all = TRUE) 
+# Majority Voting
+merged_df1 <- merged_df1 %>% 
+  mutate(relevance_dl = if_else(dl.pred_0 > dl.pred_1, 0, 1)) %>%
+  mutate(relevance_boost = if_else(boost.pred_0 > boost.pred_1, 0, 1)) %>%
+  mutate(relevance = if_else(
+        (relevance_dl + relevance_boost) < 2,0,1))
+```
+
+The result of this first ensemble technique gave me an accuracy of: ~64/65% accuracy
+
+## Ensemble Method 2
+
+Instead of just voting, I am going to be using a more sophisticated way
+of ensemble voting. I am going to append the classification and the
+probability of each model. I then proceed to add all the probabilities
+of each class across both models and proceed to make the
+classification based on that figure. The observation will be classified
+by the class with the higher overall probability after summing across
+all models.
+
+```{r}
+
+merged_df2 <- merge(x= predictions_dl%>% select(-relevance), y= predictions_boosted%>% select(-relevance), by = "id", all = TRUE) 
+
+merged_df2 <- merged_df2 %>% mutate(
+  class_0.pred = dl.pred_0 + boost.pred_0,
+  class_1.pred = dl.pred_1 + boost.pred_1
+) %>%
+  mutate(
+  relevance = if_else(class_0.pred  > class_1.pred, 0, 1)  
+  )
+
+merged_df2 %>% head() 
+```
+
+```{r}
+#Analyzing these results
+
+# Finding the number of predictions that have a 70% certainty in the final class
+good_pred <- merged_df2 %>% filter(dl.pred_0 >= 0.7 | dl.pred_1 >= 0.7 | boost.pred_1 >= 0.7|boost.pred_0 >= 0.7) %>% nrow()
+good_pred 
+
+print(paste("Percentage of Really Accurate Responses:", good_pred/nrow(merged_df2)))
+```
+
+
+The reality is that my ensemble prediction underperformed the boosted tree predictions. Hence for the final submission, my best model was simply just the boosted tree submission.
+```{r,message=FALSE, warning=FALSE,eval = FALSE}
+# Export to CSV
+write.csv(predictions_boosted%>%
+  select(relevance, id) , file = "best_prediction.csv", row.names = FALSE)
+```
